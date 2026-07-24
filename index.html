@@ -191,7 +191,6 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
     <span id="sessionBadge" class="session-badge">--</span>
   </div>
   <div class="topbar-right">
-    <button class="btn btn-small" id="btnWarmup" title="Pre-load all timeframes">🔥 Warm Up</button>
     <button class="btn btn-small" id="btnRefresh" title="Refresh market data">🔄 Refresh</button>
     <button class="btn btn-primary btn-small" id="btnLogSignal" title="Log current watchlist signal" style="display:none">📝 Log Signal</button>
     <button class="btn btn-small" id="btnExport">⬇ Export CSV</button>
@@ -847,8 +846,7 @@ const WL_STATE = {
 
 const TF_MAP = {'15m':15,'30m':30,'1h':60,'4h':240,'1d':1440,'1w':10080};
 const PARENT_TF = {'15m':'1h','30m':'4h','1h':'4h','4h':'1d','1d':'1w','1w':'1w'};
-const WARMUP_ORDER = ['1w','1d','4h','1h','30m','15m'];
-const MIN_REFRESH_MS = 15*60*1000; // 15 min (build v)
+const MIN_REFRESH_MS = 15*60*1000; // 15 min — halved from 30 per user request (build y)
 
 function wlInit(){
   document.getElementById('wlTimeframe').value=WL_STATE.tf;
@@ -899,7 +897,7 @@ async function fetchWlData(tf,opts={}){
 async function refreshWatchlist(){
   if(WL_STATE.fetching) return;
   const now=Date.now();
-  if(now-WL_STATE.lastRefresh<MIN_REFRESH_MS && !WL_STATE.lastRefresh===0){
+  if(WL_STATE.lastRefresh && now-WL_STATE.lastRefresh<MIN_REFRESH_MS){
     toast('Cooldown active — try again in '+Math.ceil((MIN_REFRESH_MS-(now-WL_STATE.lastRefresh))/1000)+'s','info');
     return;
   }
@@ -933,31 +931,6 @@ async function refreshWatchlist(){
     WL_STATE.fetching=false;
     updateConn(navigator.onLine,'Ready');
   }
-}
-
-async function warmUpAll(){
-  updateConn(true,'Warming up...');
-  for(const tf of WARMUP_ORDER){
-    try{
-      const results=await fetchWlData(tf,{fast:true});
-      for(const sym in results){
-        const raw=results[sym];
-        if(!raw || !raw.values) continue;
-        const vals=raw.values.slice().reverse();
-        const closes=vals.map(v=>parseFloat(v.close));
-        const ohlc=vals.map(v=>({o:parseFloat(v.open),h:parseFloat(v.high),l:parseFloat(v.low),c:parseFloat(v.close)}));
-        if(closes.length<55) continue;
-        const e10=ema(closes,10);
-        const e50=ema(closes,50);
-        const analysis=computeAnalysis(sym,closes,ohlc,e10,e50);
-        WL_STATE.data[sym]={closes,ohlc,ema10:e10,ema50:e50,analysis,timestamp:Date.now()};
-        sSet('wl_cache_'+tf+'_'+sym,WL_STATE.data[sym]);
-      }
-    }catch(e){ console.warn('[WL] Warmup fail for',tf,e.message); }
-  }
-  updateConn(navigator.onLine,'Ready');
-  toast('Warm up complete','success');
-  renderWatchlist();
 }
 
 // ----- Analysis Engine (with ALL fixes) -----
@@ -1367,7 +1340,6 @@ document.getElementById('sniperToggle').addEventListener('click',()=>{
   renderWatchlist();
 });
 document.getElementById('btnRefresh').addEventListener('click',refreshWatchlist);
-document.getElementById('btnWarmup').addEventListener('click',warmUpAll);
 document.getElementById('btnAiRead').addEventListener('click',runAiRead);
 document.getElementById('btnLogWlSignal').addEventListener('click',logWlSignal);
 document.getElementById('btnLogSignal').addEventListener('click',logWlSignal);
@@ -1408,8 +1380,20 @@ function nsInit(){
   renderNsChart();
 }
 
+const CAL_CACHE_MS = 30*60*1000; // 30 min — halved from 60 per user request
+
 async function loadCalendar(){
   const status=document.getElementById('calStatus');
+  const cached=sGet('cal_cache',null);
+
+  // Fresh cache — skip the network call entirely
+  if(cached && Array.isArray(cached.events) && cached.events.length && Date.now()-cached.ts<CAL_CACHE_MS){
+    NS_STATE.events=cached.events;
+    status.className='badge badge-green';status.textContent='LIVE (cached)';
+    renderCalendar();
+    return;
+  }
+
   status.className='badge badge-amber';status.textContent='Loading...';
   try{
     const today=fmtDate(new Date());
@@ -1424,14 +1408,21 @@ async function loadCalendar(){
         actual:e.actual||'',
         time:e.time||e.date||today+'T12:00:00Z'
       }));
+      sSet('cal_cache',{events:NS_STATE.events,ts:Date.now()});
       status.className='badge badge-green';status.textContent='LIVE';
     }else{
       throw new Error('Empty calendar');
     }
   }catch(e){
     console.warn('[NS] Calendar fallback:',e.message);
-    NS_STATE.events=SIM_EVENTS.map(e=>({...e,title:'[SIM] '+e.title}));
-    status.className='badge badge-red';status.textContent='SIMULATED';
+    // Prefer a stale cache over fake data — real (if old) beats simulated
+    if(cached && Array.isArray(cached.events) && cached.events.length){
+      NS_STATE.events=cached.events;
+      status.className='badge badge-amber';status.textContent='LIVE (stale)';
+    }else{
+      NS_STATE.events=SIM_EVENTS.map(e=>({...e,title:'[SIM] '+e.title}));
+      status.className='badge badge-red';status.textContent='SIMULATED';
+    }
   }
   renderCalendar();
 }

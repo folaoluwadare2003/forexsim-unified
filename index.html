@@ -175,6 +175,24 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
   .wl-layout, .ns-layout, .acc-layout { grid-template-columns: 1fr; }
   .trade-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* ===== SCREENSHOT LIGHTBOX ===== */
+.shot-lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:1000; align-items:center; justify-content:center; flex-direction:column; padding:30px; cursor:zoom-out; }
+.shot-lightbox.open { display:flex; }
+.shot-lightbox img { max-width:90vw; max-height:80vh; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.6); cursor:default; }
+.shot-lightbox .shot-caption { color:var(--text2); margin-top:12px; font-size:13px; }
+.shot-lightbox .shot-close { position:absolute; top:20px; right:28px; color:var(--text); font-size:28px; cursor:pointer; background:none; border:none; }
+
+/* ===== JOURNAL MONEY BACKGROUND ===== */
+#tab-journal { position:relative; overflow:hidden; }
+#moneyBg { position:absolute; inset:0; z-index:0; pointer-events:none; overflow:hidden; opacity:0.55; }
+#tab-journal > .card { position:relative; z-index:1; }
+.money-particle { position:absolute; font-size:22px; color:var(--green); opacity:0; user-select:none; will-change:transform,opacity; text-shadow:0 0 8px rgba(34,197,85,0.35); animation: moneyFloat 1.7s ease-out forwards; }
+@keyframes moneyFloat {
+  0% { opacity:0; transform: translateY(0) scale(0.7) rotate(0deg); }
+  12% { opacity:0.85; }
+  100% { opacity:0; transform: translateY(-130px) scale(1.15) rotate(18deg); }
+}
 </style>
 <base target="_blank">
 </head>
@@ -264,6 +282,21 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
           <select id="nsPair"><option value="EUR/USD">EUR/USD</option><option value="GBP/USD">GBP/USD</option><option value="USD/JPY">USD/JPY</option><option value="AUD/USD">AUD/USD</option><option value="USD/CAD">USD/CAD</option><option value="USD/CHF">USD/CHF</option><option value="NZD/USD">NZD/USD</option><option value="XAU/USD">XAU/USD</option></select>
           <button class="btn btn-small" id="nsRefreshCal">Refresh</button>
         </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <select id="calFilter" style="flex:1">
+            <option value="ALL" selected>All Currencies</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <option value="JPY">JPY</option>
+            <option value="AUD">AUD</option>
+            <option value="NZD">NZD</option>
+            <option value="CAD">CAD</option>
+            <option value="CHF">CHF</option>
+            <option value="METALS">Metals (XAU/XAG/XPT)</option>
+            <option value="CRYPTO">Crypto</option>
+          </select>
+        </div>
         <div id="nsCalendar" class="ns-calendar"></div>
       </div>
     </div>
@@ -306,8 +339,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
 
 <!-- ===== JOURNAL PANEL ===== -->
 <div id="tab-journal" class="tab-panel">
-  <div class="card">
-    <div class="card-title">➕ Log New Trade</div>
+  <div id="moneyBg"></div>
     <div class="journal-form" id="journalForm">
       <div><label>Date</label><input type="date" id="jDate"></div>
       <div><label>Time</label><input type="time" id="jTime"></div>
@@ -323,6 +355,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
       <div><label>Session</label><select id="jSession"><option>London</option><option>NY</option><option>Asian</option><option>London-NY Overlap</option></select></div>
       <div><label>Emotion</label><select id="jEmotion"><option>Calm</option><option>FOMO</option><option>Revenge</option><option>Hesitant</option><option>Confident</option></select></div>
       <div><label>Stars</label><select id="jStars"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div>
+      <div><label>Screenshot</label><input type="file" id="jScreenshot" accept="image/*"></div>
       <div style="grid-column:1/-1"><label>Notes</label><textarea id="jNotes"></textarea></div>
     </div>
     <div style="display:flex;gap:10px;margin-top:12px">
@@ -398,6 +431,13 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
     <h3 id="modalTitle">Title</h3>
     <div id="modalBody"></div>
   </div>
+</div>
+
+<!-- ===== SCREENSHOT LIGHTBOX ===== -->
+<div class="shot-lightbox" id="shotLightbox" onclick="if(event.target===this)closeScreenshot()">
+  <button class="shot-close" onclick="closeScreenshot()">&times;</button>
+  <img id="shotLightboxImg" src="" alt="Trade screenshot">
+  <div class="shot-caption" id="shotLightboxCaption"></div>
 </div>
 
 <script>
@@ -1351,6 +1391,7 @@ document.getElementById('btnLogSignal').addEventListener('click',logWlSignal);
 
 const NS_STATE = {
   pair: 'EUR/USD',
+  calFilter: 'ALL',
   events: [],
   selectedEvents: [],
   scenario: 'auto',
@@ -1428,17 +1469,19 @@ async function loadCalendar(){
 }
 
 function renderCalendar(){
-  const pair=document.getElementById('nsPair').value;
-  const base=pair.split('/')[0];
-  const quote=pair.split('/')[1];
+  const filter=NS_STATE.calFilter||'ALL';
   const now=Date.now();
   const el=document.getElementById('nsCalendar');
-  const relevant=NS_STATE.events.filter(e=>{
-    const t=new Date(e.time).getTime();
-    return e.pair===base||e.pair===quote||e.pair==='USD'||Math.abs(t-now)<6*3600000;
-  });
+  const METAL_CCY=['XAU','XAG','XPT'];
+  const CRYPTO_CCY=['BTC','ETH','SOL','XRP','DOGE'];
+  let relevant;
+  if(filter==='ALL') relevant=NS_STATE.events.slice();
+  else if(filter==='METALS') relevant=NS_STATE.events.filter(e=>METAL_CCY.includes(e.pair));
+  else if(filter==='CRYPTO') relevant=NS_STATE.events.filter(e=>CRYPTO_CCY.includes(e.pair));
+  else relevant=NS_STATE.events.filter(e=>e.pair===filter);
+  relevant=relevant.slice().sort((a,b)=>new Date(a.time)-new Date(b.time));
   if(!relevant.length){
-    el.innerHTML='<div style="color:var(--text3);padding:20px;text-align:center">No events for this pair today</div>';
+    el.innerHTML='<div style="color:var(--text3);padding:20px;text-align:center">No events match this filter today</div>';
     return;
   }
   el.innerHTML=relevant.map(e=>{
@@ -1638,6 +1681,7 @@ function logNewsSignal(pair,events,result){
 
 document.getElementById('btnRunScenario').addEventListener('click',runScenario);
 document.getElementById('nsPair').addEventListener('change',e=>{NS_STATE.pair=e.target.value;renderCalendar();});
+document.getElementById('calFilter').addEventListener('change',e=>{NS_STATE.calFilter=e.target.value;renderCalendar();});
 document.getElementById('nsRefreshCal').addEventListener('click',loadCalendar);
 
 
@@ -1659,7 +1703,34 @@ function journalInit(){
 function getTrades(){ return sGet('trades',[]); }
 function saveTrades(t){ sSet('trades',t); }
 
-function addTrade(){
+// Reads an uploaded screenshot and downsizes/compresses it to a JPEG data URL
+// so trade screenshots don't blow past localStorage's ~5-10MB limit. Resolves
+// null if no file was chosen or the image couldn't be read.
+function readAndCompressImage(file){
+  return new Promise(resolve=>{
+    if(!file){resolve(null);return;}
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxW=900;
+        const scale=Math.min(1,maxW/img.width);
+        const canvas=document.createElement('canvas');
+        canvas.width=Math.round(img.width*scale);
+        canvas.height=Math.round(img.height*scale);
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(img,0,0,canvas.width,canvas.height);
+        resolve(canvas.toDataURL('image/jpeg',0.72));
+      };
+      img.onerror=()=>resolve(null);
+      img.src=reader.result;
+    };
+    reader.onerror=()=>resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addTrade(){
   const pair=document.getElementById('jPair').value;
   const dir=document.getElementById('jDir').value;
   const entry=parseFloat(document.getElementById('jEntry').value);
@@ -1671,6 +1742,9 @@ function addTrade(){
 
   const pl=calcPL(pair,dir,entry,exit,lot);
   const rMultiple=(sl && tp)?((dir==='Long'?tp-entry:entry-tp)/Math.abs(entry-sl)):0;
+
+  const screenshotFile=document.getElementById('jScreenshot').files[0]||null;
+  const screenshot=await readAndCompressImage(screenshotFile);
 
   const trade={
     id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
@@ -1685,12 +1759,21 @@ function addTrade(){
     emotion:document.getElementById('jEmotion').value,
     stars:parseInt(document.getElementById('jStars').value),
     notes:document.getElementById('jNotes').value,
+    screenshot,
     timestamp:Date.now()
   };
 
   const trades=getTrades();
   trades.unshift(trade);
-  saveTrades(trades);
+  try{
+    saveTrades(trades);
+  }catch(e){
+    // localStorage full — most likely too many screenshots. Save the trade
+    // without the image rather than losing the whole entry.
+    trade.screenshot=null;
+    saveTrades(trades);
+    toast('Trade saved, but storage is full — screenshot was skipped','info');
+  }
 
   // Also update accuracy log if this trade came from a signal
   if(trade.source && trade.source!=='Manual'){
@@ -1703,6 +1786,7 @@ function addTrade(){
     }
   }
 
+  document.getElementById('jScreenshot').value='';
   toast('Trade saved','success');
   renderJournal();
 }
@@ -1724,6 +1808,52 @@ function deleteTrade(id){
   const trades=getTrades().filter(t=>t.id!==id);
   saveTrades(trades);
   renderJournal();
+}
+
+// ----- Journal money background (ambient drift + cursor trail) -----
+const MONEY_SYMBOLS=['💵','💰','💴','💶','💷','$','€','£','¥','🪙'];
+let lastMoneySpawn=0;
+function spawnMoneyParticle(x,y){
+  const bg=document.getElementById('moneyBg');
+  if(!bg) return;
+  const el=document.createElement('div');
+  el.className='money-particle';
+  el.textContent=MONEY_SYMBOLS[Math.floor(Math.random()*MONEY_SYMBOLS.length)];
+  el.style.left=x+'px';
+  el.style.top=y+'px';
+  el.style.fontSize=(14+Math.random()*14)+'px';
+  bg.appendChild(el);
+  setTimeout(()=>el.remove(),1800);
+}
+function initMoneyBg(){
+  const panel=document.getElementById('tab-journal');
+  if(!panel) return;
+  // Slow ambient drift so the tab feels alive even without touching it
+  setInterval(()=>{
+    if(!panel.classList.contains('active')) return;
+    const rect=panel.getBoundingClientRect();
+    if(!rect.width) return;
+    spawnMoneyParticle(Math.random()*rect.width, rect.height-30);
+  },900);
+  // Cursor trail — money floats up from wherever you hover
+  panel.addEventListener('mousemove',e=>{
+    const now=Date.now();
+    if(now-lastMoneySpawn<90) return; // throttle so it doesn't flood the DOM
+    lastMoneySpawn=now;
+    const rect=panel.getBoundingClientRect();
+    spawnMoneyParticle(e.clientX-rect.left, e.clientY-rect.top);
+  });
+}
+
+function viewScreenshot(id){
+  const trade=getTrades().find(t=>t.id===id);
+  if(!trade || !trade.screenshot) return;
+  document.getElementById('shotLightboxImg').src=trade.screenshot;
+  document.getElementById('shotLightboxCaption').textContent=`${trade.pair} · ${trade.dir} · ${trade.date} ${trade.time}`;
+  document.getElementById('shotLightbox').classList.add('open');
+}
+function closeScreenshot(){
+  document.getElementById('shotLightbox').classList.remove('open');
 }
 
 function renderJournal(){
@@ -1814,13 +1944,14 @@ function renderJournal(){
     const cls=t.pl>0?'win':t.pl<0?'loss':'';
     const plCls=t.pl>0?'win':t.pl<0?'loss':'';
     const stars='★'.repeat(t.stars)+'☆'.repeat(5-t.stars);
+    const shotBtn=t.screenshot?`<button class="btn btn-small" onclick="viewScreenshot('${t.id}')" title="Review screenshot">📷</button>`:'';
     return `<div class="trade-row ${cls}">
       <div>${t.date}</div><div>${t.pair}</div><div>${t.dir}</div>
       <div>${t.entry}</div><div>${t.exit}</div>
       <div>${t.lot}</div><div class="pl ${plCls}">$${t.pl.toFixed(2)}</div>
       <div>${t.pips.toFixed(1)}p</div><div>${t.rMultiple? t.rMultiple+'R':'—'}</div>
       <div>${t.setup}</div><div style="color:var(--amber)">${stars}</div>
-      <div><button class="btn btn-small" onclick="deleteTrade('${t.id}')">🗑</button></div>
+      <div style="display:flex;gap:4px">${shotBtn}<button class="btn btn-small" onclick="deleteTrade('${t.id}')">🗑</button></div>
     </div>`;
   }).join('');
   document.getElementById('tradeList').innerHTML=list||'<div style="text-align:center;padding:20px;color:var(--text3)">No trades yet</div>';
@@ -2021,6 +2152,7 @@ function init(){
   wlInit();
   nsInit();
   journalInit();
+  initMoneyBg();
 }
 init();
 </script>
